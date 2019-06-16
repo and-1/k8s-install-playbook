@@ -1,0 +1,118 @@
+- hosts: all
+  tasks:
+   - name: rename host
+     shell: echo "{{inventory_hostname}}" > /etc/hostname && cat /etc/hostname > /proc/sys/kernel/hostname
+     when: "inventory_hostname != ansible_nodename"
+   - name: disable selinux
+     selinux: state=disabled 
+   - name: disable swap
+     shell: swapoff -a && sed -i /swap/d /etc/fstab
+   - name: Add k8s repo
+     copy:
+      dest: /etc/yum.repos.d/k8s.repo
+      content: |
+       [kubernetes]
+       name=Kubernetes
+       baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+       enabled=1
+       gpgcheck=0 repo_gpgcheck=0 gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg - name: Add docker repo
+   - name: Add docker repo
+     get_url: dest=/etc/yum.repos.d/docker.repo url=https://download.docker.com/linux/centos/docker-ce.repo
+   - name: add repos key
+     shell: "rpm --import {{item}}"
+     with_items:
+      - "https://packages.cloud.google.com/yum/doc/yum-key.gpg"
+      - "https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg"
+   - name: install required packages
+     yum: name="{{item}}" state=present disable_gpg_check=true
+     with_items:
+      - yum-utils
+      - device-mapper-persistent-data
+      - lvm2 
+      - bridge-utils
+      - iptables-services
+      - kubelet
+      - kubeadm
+      - kubectl
+      - docker-ce
+      - vim
+   - name: disable firewalld,NetworkManager services
+     service: name="{{item}}" state=stopped enabled=false
+     with_items:
+      - firewalld
+      - NetworkManager
+   - name: enable iptables service
+     service: name="{{item}}" state=started enabled=true
+     with_items:
+      - iptables
+      - network
+   - name: Add firewall rules
+     iptables: destination_port="{{item}}" state=present protocol=tcp chain=INPUT jump=ACCEPT action=insert rule_num=1
+     with_items:
+      - 6443
+      - 2378:2380
+      - 10250
+      - 10251
+      - 10252
+      - 10255
+      - 30000:32767
+      - 6666:6667
+      - 9099
+     register: iptables
+   - name: save firewall rules
+     shell: iptables-save > /etc/sysconfig/iptables
+     when: iptables.changed
+   - name: check k8s cgroup type
+     shell: |
+      a=$(docker info | grep -i cgroup | awk '{print $NF}')
+      b=$(cat /etc/systemd/system/kubelet.service.d/10-kubeadm.conf | grep cgroup | tr -d \" | awk -F\= '{print $NF}')
+      [ $a == $b ]
+     register: cgroup_chk
+     ignore_errors: true
+   - name: change k8s cgroup type
+     block:
+      - shell: sed -i "s/cgroup-driver=systemd/cgroup-driver=cgroupfs/g" /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+      - shell: systemctl daemon-reload
+     when: cgroup_chk.rc == 1
+   - name: start kubelet & docker
+     service: name="{{item}}" state=started enabled=true
+     with_items:
+      - docker
+      - kubelet
+   - name: tune bridge kernel parameter
+     sysctl: name="{{item}}" state=present reload=true value=1
+     with_items:
+      - net.bridge.bridge-nf-call-ip6tables
+      - net.bridge.bridge-nf-call-iptables
+   - block:
+     - name: Init cluster
+       shell: kubeadm init --pod-network-cidr "{{pod_net_cidr}}"
+       args:
+         creates: /etc/kubernetes/admin.conf
+     - name: Get token
+       shell: kubeadm token list |awk '{if (NR==2){print $1}}'
+       register: token
+       run_once: true
+     - name: Get ca cert hash
+       shell: openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.* //'
+       register: sha
+       run_once: true
+     - name: Create .kube directory
+       file:
+         state: directory
+         owner: "{{ansible_user_id}}"
+         group: "{{ansible_user_id}}"
+         path: "{{ansible_user_dir}}/.kube"
+     - name: Copy kubeconfig file to home dir
+       copy: 
+         dest: "{{ansible_user_dir}}/.kube/config"
+         src: /etc/kubernetes/admin.conf
+         remote_src: true
+         owner: "{{ansible_user_id}}"
+         group: "{{ansible_user_id}}"
+     - name: Install cni
+       shell: kubectl apply -f https://docs.projectcalico.org/v3.7/manifests/calico.yaml
+     when: "'ctrl' in group_names"
+   - name: add worker nodes
+     shell: kubeadm join --token "{{token.stdout}}" {{groups['ctrl'] | first}}:6443 --discovery-token-ca-cert-hash sha256:"{{sha.stdout}}"
+     when: "'worker' in group_names and token is defined and sha is defined"
