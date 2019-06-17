@@ -15,7 +15,9 @@
        name=Kubernetes
        baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
        enabled=1
-       gpgcheck=0 repo_gpgcheck=0 gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg - name: Add docker repo
+       gpgcheck=0
+       repo_gpgcheck=0
+       gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
    - name: Add docker repo
      get_url: dest=/etc/yum.repos.d/docker.repo url=https://download.docker.com/linux/centos/docker-ce.repo
    - name: add repos key
@@ -27,8 +29,8 @@
      yum: name="{{item}}" state=present disable_gpg_check=true
      with_items:
       - yum-utils
-      - device-mapper-persistent-data
-      - lvm2 
+#      - device-mapper-persistent-data
+#      - lvm2 
       - bridge-utils
       - iptables-services
       - kubelet
