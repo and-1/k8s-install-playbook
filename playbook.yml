@@ -38,11 +38,11 @@
       - kubectl
       - docker-ce
       - vim
-   - name: disable firewalld,NetworkManager services
-     service: name="{{item}}" state=stopped enabled=false
-     with_items:
-      - firewalld
-      - NetworkManager
+#   - name: disable firewalld,NetworkManager services
+#     service: name="{{item}}" state=stopped enabled=false
+#     with_items:
+#      - firewalld
+#      - NetworkManager
    - name: enable iptables service
      service: name="{{item}}" state=started enabled=true
      with_items:
@@ -94,11 +94,9 @@
      - name: Get token
        shell: kubeadm token list |awk '{if (NR==2){print $1}}'
        register: token
-       run_once: true
      - name: Get ca cert hash
        shell: openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.* //'
        register: sha
-       run_once: true
      - name: Create .kube directory
        file:
          state: directory
@@ -114,7 +112,7 @@
          group: "{{ansible_user_id}}"
      - name: Install cni
        shell: kubectl apply -f https://docs.projectcalico.org/v3.7/manifests/calico.yaml
-     when: "'ctrl' in group_names"
+     when: "groups['ctrl'] | first == ansible_hostname"
    - name: add worker nodes
-     shell: kubeadm join --token "{{token.stdout}}" {{groups['ctrl'] | first}}:6443 --discovery-token-ca-cert-hash sha256:"{{sha.stdout}}"
-     when: "'worker' in group_names and token is defined and sha is defined"
+     shell: kubeadm join --token "{{hostvars[groups['ctrl']|first]['token']['stdout']}}" {{hostvars[groups['ctrl']|first]['ansible_default_ipv4']['address']}}:6443 --discovery-token-ca-cert-hash sha256:"{{hostvars[groups['ctrl']|first]['sha']['stdout']}}"
+     when: "'worker' in group_names and hostvars[groups['ctrl']|first]['token'] is defined and hostvars[groups['ctrl']|first]['sha'] is defined"
